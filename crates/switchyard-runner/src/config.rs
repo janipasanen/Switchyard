@@ -1981,4 +1981,110 @@ advisor_target = "advisor"
         );
         assert!(error_message(&invalid).contains("max_reviews must be at least 1"));
     }
+
+    const DELEGATE_CONFIG: &str = r#"
+schema_version = 1
+
+[llm_clients.anthropic]
+format = "anthropic_messages"
+base_url = "https://example.test"
+
+[targets.orchestrator]
+id = "orchestrator/model"
+llm_client = "anthropic"
+
+[targets.worker]
+id = "worker/model"
+llm_client = "anthropic"
+
+[routes.delegate]
+id = "switchyard/delegate"
+type = "delegate"
+orchestrator_target = "orchestrator"
+worker_target = "worker"
+"#;
+
+    #[test]
+    fn delegate_route_parses_with_defaults_and_builds() -> RunnerResult<()> {
+        let state = runner_from_toml(DELEGATE_CONFIG)?;
+        let route = state
+            .route("switchyard/delegate")
+            .expect("delegate route should exist");
+        let models = route.models();
+        assert_eq!(
+            models.models_for(&Category::Capable),
+            [ModelId::from("orchestrator/model")]
+        );
+        assert_eq!(
+            models.models_for(&Category::Efficient),
+            [ModelId::from("worker/model")]
+        );
+        assert_eq!(
+            state
+                .models()
+                .map(|model| model.id.as_str())
+                .collect::<Vec<_>>(),
+            ["switchyard/delegate"]
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn delegate_route_accepts_every_knob() -> RunnerResult<()> {
+        let tuned = DELEGATE_CONFIG.replace(
+            "worker_target = \"worker\"",
+            concat!(
+                "worker_target = \"worker\"\n",
+                "tool_name = \"run_subtask\"\n",
+                "tool_description = \"Hand off a narrow task.\"\n",
+                "worker_system_prompt = \"You are a careful, narrowly-scoped worker.\"\n",
+                "max_delegations = 3\n",
+                "context_window = 200000\n",
+                "tool_calling = true\n",
+                "reasoning = true",
+            ),
+        );
+        runner_from_toml(&tuned)?;
+        Ok(())
+    }
+
+    #[test]
+    fn delegate_route_rejects_unknown_keys() {
+        let invalid = DELEGATE_CONFIG.replace(
+            "worker_target = \"worker\"",
+            "worker_target = \"worker\"\nbogus_field = 1",
+        );
+        assert!(error_message(&invalid).contains("bogus_field"));
+    }
+
+    #[test]
+    fn delegate_route_requires_both_targets() {
+        let missing = DELEGATE_CONFIG.replace("worker_target = \"worker\"\n", "");
+        assert!(error_message(&missing).contains("worker_target"));
+    }
+
+    #[test]
+    fn delegate_route_rejects_unknown_target() {
+        let invalid =
+            DELEGATE_CONFIG.replace("worker_target = \"worker\"", "worker_target = \"missing\"");
+        assert!(error_message(&invalid).contains("missing"));
+    }
+
+    #[test]
+    fn delegate_route_rejects_zero_max_delegations() {
+        let invalid = DELEGATE_CONFIG.replace(
+            "worker_target = \"worker\"",
+            "worker_target = \"worker\"\nmax_delegations = 0",
+        );
+        assert!(error_message(&invalid).contains("max_delegations must be at least 1"));
+    }
+
+    #[test]
+    fn delegate_route_rejects_blank_tool_name() {
+        let invalid = DELEGATE_CONFIG.replace(
+            "worker_target = \"worker\"",
+            "worker_target = \"worker\"\ntool_name = \"   \"",
+        );
+        assert!(error_message(&invalid).contains("tool_name must not be empty"));
+    }
 }

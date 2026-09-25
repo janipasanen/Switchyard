@@ -384,6 +384,24 @@ advisor's plan. See
 | `reviewer_system_prompt` | No | packaged prompt | Replaces the APPROVE/REDO reviewer prompt. |
 | `redo_feedback_prefix` | No | packaged prompt | Replaces the text put in front of a REDO plan fed back to the executor. |
 
+### `delegate`
+
+Serves every client-visible turn from the orchestrator, offering it one
+additional tool that hands a narrow sub-task to a worker model. The worker's
+result is fed back to the orchestrator as a tool result, so it can review it
+and continue -- delegate again, call one of its own tools, or answer -- before
+the client sees anything. See
+[Delegate Routing](../routing_algorithms/delegate_routing.md).
+
+| Key | Required | Default | Meaning |
+|---|:---:|---|---|
+| `orchestrator_target` | Yes | — | Serves every client-visible turn and may delegate sub-tasks. |
+| `worker_target` | Yes | — | Executes delegated sub-tasks. Not a routing destination. |
+| `tool_name` | No | `delegate_task` | Name of the synthetic tool exposed to the orchestrator. |
+| `tool_description` | No | packaged description | Replaces the built-in description of the delegation tool. |
+| `worker_system_prompt` | No | unset | System instruction prepended to a delegated sub-task's own request. |
+| `max_delegations` | No | `6` | Orchestrator round trips allowed per client-visible turn. Must be at least `1`. |
+
 ## Validation Errors
 
 `--dry-run` prefixes configuration failures with

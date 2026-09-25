@@ -12,10 +12,10 @@ use std::sync::Arc;
 use libsy::{
     AdvisorGate, AdvisorGateConfig, Algorithm, ClassifierContractConfig, ClassifierResponseFormat,
     ClassifyTrigger, CompositeRouter, CompositeRouterConfig, CustomClassifierConfig,
-    CustomClassifierPolicy, EscalationJudgeConfig, GateTrigger, HandoffNoteConfig,
-    LlmClassifierConfig, LlmFallback, LlmTaskClassifier, Noop, Passthrough, PickerMode,
-    PlanExecute, PlanExecuteConfig, Random, StageRouter, StageRouterConfig, SubagentRouter,
-    SubagentRouterConfig, TaskClassifierConfig, ToolSemantics,
+    CustomClassifierPolicy, Delegate, DelegateConfig, EscalationJudgeConfig, GateTrigger,
+    HandoffNoteConfig, LlmClassifierConfig, LlmFallback, LlmTaskClassifier, Noop, Passthrough,
+    PickerMode, PlanExecute, PlanExecuteConfig, Random, StageRouter, StageRouterConfig,
+    SubagentRouter, SubagentRouterConfig, TaskClassifierConfig, ToolSemantics,
 };
 use serde::Deserialize;
 use switchyard_protocol::{Category, ModelId};
@@ -346,6 +346,27 @@ pub enum AlgorithmSpec {
         #[serde(default)]
         planner_reasoning_as_text: bool,
     },
+    /// Serves the orchestrator, letting it delegate narrow sub-tasks to a worker
+    /// model through a synthetic tool call instead of the client round-tripping them.
+    Delegate {
+        /// Serves every client-visible turn and may delegate sub-tasks to the worker.
+        orchestrator_target: String,
+        /// Executes delegated sub-tasks. Never a routing destination itself.
+        worker_target: String,
+        /// Name of the synthetic tool exposed to the orchestrator.
+        #[serde(default = "default_delegate_tool_name")]
+        tool_name: String,
+        /// Replaces the built-in description of the delegation tool.
+        #[serde(default)]
+        tool_description: Option<String>,
+        /// System instruction prepended to a delegated sub-task's own request.
+        #[serde(default)]
+        worker_system_prompt: Option<String>,
+        /// Orchestrator round trips allowed per client-visible turn, bounding a
+        /// delegation loop that never converges.
+        #[serde(default = "default_max_delegations")]
+        max_delegations: u32,
+    },
     /// Asks a judge model which target should serve the request.
     LlmClassifier {
         /// Judge and tier settings, written directly in the route table.
@@ -554,6 +575,12 @@ impl AlgorithmSpec {
                 efficient_target,
                 ..
             } => vec![capable_target.as_str(), efficient_target.as_str()],
+            // The worker is judge-only: delegated calls go through its own client,
+            // so it is not a completion (or count_tokens) destination.
+            Self::Delegate {
+                orchestrator_target,
+                ..
+            } => vec![orchestrator_target],
             Self::LlmClassifier { config, .. } => match config.classifier_mode() {
                 ClassifierMode::Capability => config
                     .weak_target
@@ -642,6 +669,7 @@ impl AlgorithmSpec {
                 names.push(&classifier.target);
             }
             Self::Advisor { advisor_target, .. } => names.push(advisor_target),
+            Self::Delegate { worker_target, .. } => names.push(worker_target),
             _ => {}
         }
         // A sub-agent classifier calls its own judge, which is never a completion target.
@@ -738,6 +766,18 @@ impl AlgorithmSpec {
                 (Category::Any, vec![executor_target.clone()]),
                 (Category::Judge, vec![advisor_target.clone()]),
             ]),
+            Self::Delegate {
+                orchestrator_target,
+                worker_target,
+                ..
+            } => category_models([
+                (Category::Capable, vec![orchestrator_target.clone()]),
+                (Category::Efficient, vec![worker_target.clone()]),
+                (
+                    Category::Any,
+                    vec![orchestrator_target.clone(), worker_target.clone()],
+                ),
+            ]),
         };
 
         let subagents = match self {
@@ -771,6 +811,11 @@ impl AlgorithmSpec {
                 advisor_target,
                 ..
             } => Some((executor_target, advisor_target)),
+            Self::Delegate {
+                orchestrator_target,
+                worker_target,
+                ..
+            } => Some((orchestrator_target, worker_target)),
             Self::Noop { .. }
             | Self::Random { .. }
             | Self::Passthrough { .. }
@@ -1221,6 +1266,30 @@ fn build_algorithm(
             })?;
             Ok(Arc::new(algorithm))
         }
+        AlgorithmSpec::Delegate {
+            tool_name,
+            tool_description,
+            worker_system_prompt,
+            max_delegations,
+            ..
+        } => {
+            let mut config = DelegateConfig {
+                tool_name: tool_name.clone(),
+                max_delegations: *max_delegations,
+                ..DelegateConfig::default()
+            };
+            if let Some(description) = tool_description {
+                config.tool_description = description.clone();
+            }
+            config.worker_system_prompt.clone_from(worker_system_prompt);
+            let algorithm = Delegate::new(config).map_err(|error| {
+                AlgorithmConfigError::with_source(
+                    format!("delegate route {route_name}: {error}"),
+                    error,
+                )
+            })?;
+            Ok(Arc::new(algorithm))
+        }
         AlgorithmSpec::LlmClassifier {
             config: classifier_config,
             ..
@@ -1471,6 +1540,14 @@ const fn default_transcript_max_chars() -> usize {
 
 const fn default_fail_open() -> bool {
     true
+}
+
+fn default_delegate_tool_name() -> String {
+    DelegateConfig::default().tool_name
+}
+
+fn default_max_delegations() -> u32 {
+    DelegateConfig::default().max_delegations
 }
 
 fn classifier_contract(prompt: Option<&str>) -> ClassifierContractConfig {

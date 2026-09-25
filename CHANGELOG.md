@@ -4,6 +4,16 @@ All notable changes to Switchyard are documented here. The format is based on
 [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this project
 adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Added
+
+- **Delegate routing** — `type = "delegate"` lets an orchestrator model hand
+  narrow, well-scoped sub-tasks to a cheaper worker through a synthetic tool
+  call (`delegate_task` by default), transparent to the client: the worker's
+  result is fed back as a tool result and the orchestrator continues. See
+  [Delegate Routing](docs/routing_algorithms/delegate_routing.md).
+
 ## [0.3.0]
 
 Switchyard 0.3.0 builds on the native server and Rust library introduced in
