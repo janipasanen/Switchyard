@@ -2144,6 +2144,7 @@ fn responses_chat_compatible_extensions_survive_to_openai_chat() -> TestResult {
     let body = json!({
         "model": "gpt-4",
         "input": "hi",
+        "stream": true,
         "metadata": {"trace": "abc"},
         "parallel_tool_calls": false,
         "prompt_cache_key": "session-1",
@@ -2175,6 +2176,32 @@ fn responses_chat_compatible_extensions_survive_to_openai_chat() -> TestResult {
     assert_eq!(output["stream_options"], json!({"include_usage": true}));
     assert_eq!(output["top_logprobs"], 2);
     assert_eq!(output["user"], "u-123");
+    Ok(())
+}
+
+// Verifies `stream_options` is dropped, not just left unmerged, when the
+// outgoing Chat request is not streaming — some OpenAI-compatible servers
+// reject `stream_options` unless `stream: true` is also set.
+#[test]
+fn stream_options_dropped_when_chat_request_is_not_streaming() -> TestResult {
+    let engine = TranslationEngine::default();
+    let body = json!({
+        "model": "gpt-4",
+        "input": "hi",
+        "stream_options": {"include_usage": true},
+    });
+
+    let output = engine
+        .translate_request(
+            WireFormat::OpenAiResponses,
+            WireFormat::OpenAiChat,
+            &body,
+            &TranslationPolicy::default(),
+        )?
+        .body;
+
+    assert!(output.get("stream").is_none());
+    assert!(output.get("stream_options").is_none());
     Ok(())
 }
 

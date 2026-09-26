@@ -1008,12 +1008,21 @@ fn copy_openai_chat_request_extensions(
         "safety_identifier",
         "service_tier",
         "store",
-        "stream_options",
         "top_logprobs",
         "user",
     ] {
         if let Some(value) = extensions.get(field) {
             body.entry(field.to_string())
+                .or_insert_with(|| value.clone());
+        }
+    }
+    // `stream_options` is only valid alongside `stream: true`. A round that
+    // forces `stream` back to false (e.g. a buffered delegate round) must not
+    // carry over a `stream_options` left in extensions from the original,
+    // streamed inbound request.
+    if body.get("stream").and_then(Value::as_bool) == Some(true) {
+        if let Some(value) = extensions.get("stream_options") {
+            body.entry("stream_options".to_string())
                 .or_insert_with(|| value.clone());
         }
     }
